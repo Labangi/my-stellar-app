@@ -1,138 +1,42 @@
-import React, { useMemo, useState } from "react";
-import "./App.css";
-import { checkConnection, addProduct, updateStock, updatePrice, discontinueProduct, getProduct, listProducts, getLowStock, getTotalValue } from "../lib/stellar.js";
+import React, { useState, useRef } from "react";
+import { checkConnection, createAlert, acknowledgeAlert, resolveAlert, escalateAlert, getAlert, listAlerts, getActiveCount } from "../lib/stellar.js";
 
+import "./App.css"
 
-const initialForm = () => ({
-    id: "prod1",
-    owner: "",
-    name: "Sample Product",
-    sku: "SKU-001",
-    quantity: "10",
-    unitPrice: "1000",
-    category: "general",
-    quantityChange: "5",
-    isAddition: true,
-    newPrice: "1500",
-    lowStockThreshold: "5",
-});
-
-const safeStringify = (value) => {
-    if (typeof value === "string") return value;
-    return JSON.stringify(value, (_key, current) => {
-        if (typeof current === "bigint") return current.toString();
-        return current;
-    }, 2);
-};
+const nowTs = () => Math.floor(Date.now() / 1000);
 
 const toOutput = (value) => {
-    if (value == null) return "No data found";
     if (typeof value === "string") return value;
-    return safeStringify(value);
-};
-
-const truncateAddr = (addr) => addr ? addr.slice(0, 8) + "..." + addr.slice(-4) : "";
-
-const parseNumericField = (value, fieldName) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error(`${fieldName} must be a valid non-negative number`);
-    }
-    return parsed;
-};
-
-const stroopsToXlm = (value) => {
-    try {
-        const raw = typeof value === "bigint" ? value : BigInt(value || 0);
-        const sign = raw < 0n ? "-" : "";
-        const absolute = raw < 0n ? -raw : raw;
-        const whole = absolute / 10000000n;
-        const fraction = String(absolute % 10000000n).padStart(7, "0").replace(/0+$/, "");
-        return `${sign}${whole}${fraction ? `.${fraction}` : ""}`;
-    } catch {
-        return String(value);
-    }
-};
-
-const buildWriteSummary = (actionName, txResult) => {
-    const status = txResult?.status || "PENDING";
-    const hash = txResult?.hash || txResult?.id || "N/A";
-    return {
-        type: "write",
-        action: actionName,
-        status,
-        hash,
-        ledger: txResult?.ledger ?? "N/A",
-        result: txResult?.resultMetaXdr ? "Transaction confirmed" : "Submitted",
-    };
-};
-
-const toFriendlyResult = (actionName, result) => {
-    if (actionName === "getTotalValue") {
-        return {
-            totalValueStroops: typeof result === "bigint" ? result.toString() : String(result),
-            totalValueXLM: stroopsToXlm(result),
-        };
-    }
-
-    if (actionName === "listProducts" || actionName === "getLowStock") {
-        const ids = Array.isArray(result) ? result : [];
-        return {
-            count: ids.length,
-            ids,
-        };
-    }
-
-    if (actionName === "getProduct") {
-        if (!result) return "Product not found";
-        return result;
-    }
-
-    return result;
-};
-
-const actionLabels = {
-    connect: "Connect Wallet",
-    addProduct: "Add Product",
-    updateStock: "Update Stock",
-    updatePrice: "Update Price",
-    discontinue: "Discontinue Product",
-    getProduct: "Get Product",
-    listProducts: "List Products",
-    getLowStock: "Low Stock Query",
-    getTotalValue: "Total Value Query",
+    return JSON.stringify(value, null, 2);
 };
 
 export default function App() {
-    const [form, setForm] = useState(initialForm);
-    const [output, setOutput] = useState("Ready.");
+    const [form, setForm] = useState({
+        id: "alert1",
+        creator: "",
+        title: "Road Closure",
+        description: "Main street blocked due to construction",
+        alertType: "traffic",
+        latitude: "407128000",
+        longitude: "-740060000",
+        radius: "500",
+        severity: "3",
+        expiresAt: String(nowTs() + 86400),
+        responder: "",
+    });
+    const [output, setOutput] = useState("");
+    const [status, setStatus] = useState("idle");
     const [walletState, setWalletState] = useState(null);
     const [isBusy, setIsBusy] = useState(false);
     const [loadingAction, setLoadingAction] = useState(null);
-    const [status, setStatus] = useState("idle");
-    const [activeTab, setActiveTab] = useState("add");
-    const [confirmAction, setConfirmAction] = useState(null);
-    const [notice, setNotice] = useState({ type: "info", message: "Connect Freighter to begin." });
-    const [history, setHistory] = useState([]);
-
-    const hasWallet = Boolean(walletState);
-
-    const dashboardStats = useMemo(() => {
-        return [
-            { label: "Wallet", value: hasWallet ? "Connected" : "Disconnected" },
-            { label: "Active Product", value: form.id || "-" },
-            { label: "Owner", value: form.owner ? truncateAddr(form.owner) : "-" },
-            { label: "Low Stock Alert", value: form.lowStockThreshold || "0" },
-        ];
-    }, [hasWallet, form.id, form.owner, form.lowStockThreshold]);
+    const [activeCount, setActiveCount] = useState("-");
+    const [activeTab, setActiveTab] = useState("create");
+    const confirmTimers = useRef({});
+    const [confirmingBtn, setConfirmingBtn] = useState(null);
 
     const setField = (event) => {
-        const { name, value, type, checked } = event.target;
-        setForm((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
-    };
-
-    const pushHistory = (entry) => {
-        setHistory((prev) => [entry, ...prev].slice(0, 7));
+        const { name, value } = event.target;
+        setForm((prev) => ({ ...prev, [name]: value }));
     };
 
     const runAction = async (actionName, action) => {
@@ -140,38 +44,15 @@ export default function App() {
         setLoadingAction(actionName);
         setStatus("idle");
         try {
-            const rawResult = await action();
-            const friendlyResult = toFriendlyResult(actionName, rawResult);
-            setOutput(toOutput(friendlyResult));
+            const result = await action();
+            setOutput(toOutput(result ?? "No data found"));
             setStatus("success");
-            setNotice({ type: "success", message: `${actionLabels[actionName] || actionName} completed successfully.` });
-            pushHistory({
-                action: actionLabels[actionName] || actionName,
-                state: "success",
-                time: new Date().toLocaleTimeString(),
-            });
         } catch (error) {
             setOutput(error?.message || String(error));
             setStatus("error");
-            setNotice({ type: "error", message: error?.message || "Action failed" });
-            pushHistory({
-                action: actionLabels[actionName] || actionName,
-                state: "error",
-                time: new Date().toLocaleTimeString(),
-            });
         } finally {
             setIsBusy(false);
             setLoadingAction(null);
-        }
-    };
-
-    const handleDestructive = (actionName, fn) => {
-        if (confirmAction === actionName) {
-            setConfirmAction(null);
-            fn();
-        } else {
-            setConfirmAction(actionName);
-            setTimeout(() => setConfirmAction(null), 3000);
         }
     };
 
@@ -179,304 +60,298 @@ export default function App() {
         const user = await checkConnection();
         if (user) {
             setWalletState(user.publicKey);
-            setForm((prev) => ({ ...prev, owner: user.publicKey }));
-            setNotice({ type: "success", message: "Wallet connected. Owner has been auto-filled." });
-        } else {
-            setWalletState(null);
-            setNotice({ type: "error", message: "Wallet not connected. Open Freighter and try again." });
+            setForm((prev) => ({
+                ...prev,
+                creator: user.publicKey,
+                responder: prev.responder || user.publicKey,
+            }));
+            return `Connected: ${user.publicKey}`;
         }
-        return user ? `Connected: ${user.publicKey}` : "Wallet: not connected";
+        setWalletState(null);
+        return "Wallet: not connected";
     });
 
-    const validateCommon = () => {
-        if (!form.id.trim()) throw new Error("Product ID is required");
-        if (!form.owner.trim()) throw new Error("Owner address is required");
-        if (!form.owner.trim().startsWith("G")) {
-            throw new Error("Owner address should start with G");
+    const onCreateAlert = () => runAction("createAlert", async () =>
+        createAlert({
+            id: form.id.trim(),
+            creator: form.creator.trim(),
+            title: form.title.trim(),
+            description: form.description.trim(),
+            alertType: form.alertType.trim(),
+            latitude: form.latitude.trim(),
+            longitude: form.longitude.trim(),
+            radius: form.radius.trim(),
+            severity: form.severity.trim(),
+            expiresAt: form.expiresAt.trim(),
+        })
+    );
+
+    const onAcknowledge = () => runAction("acknowledge", async () =>
+        acknowledgeAlert({
+            id: form.id.trim(),
+            responder: form.responder.trim() || form.creator.trim(),
+        })
+    );
+
+    const onResolve = () => runAction("resolve", async () =>
+        resolveAlert({
+            id: form.id.trim(),
+            creator: form.creator.trim(),
+        })
+    );
+
+    const handleDestructive = (btnKey, action) => {
+        if (confirmingBtn === btnKey) {
+            clearTimeout(confirmTimers.current[btnKey]);
+            setConfirmingBtn(null);
+            action();
+        } else {
+            setConfirmingBtn(btnKey);
+            confirmTimers.current[btnKey] = setTimeout(() => setConfirmingBtn(null), 3000);
         }
     };
 
-    const onAddProduct = () => runAction("addProduct", async () => {
-        validateCommon();
-        if (!form.name.trim()) throw new Error("Product name is required");
-        parseNumericField(form.quantity, "Quantity");
-        parseNumericField(form.unitPrice, "Unit price");
+    const onEscalate = () => handleDestructive("escalate", () =>
+        runAction("escalate", async () =>
+            escalateAlert({
+                id: form.id.trim(),
+                creator: form.creator.trim(),
+            })
+        )
+    );
 
-        const result = await addProduct({
-            id: form.id.trim(),
-            owner: form.owner.trim(),
-            name: form.name.trim(),
-            sku: form.sku.trim(),
-            quantity: form.quantity.trim(),
-            unitPrice: form.unitPrice.trim(),
-            category: form.category.trim() || "general",
-        });
+    const onGetAlert = () => runAction("getAlert", async () => getAlert(form.id.trim()));
 
-        return buildWriteSummary("addProduct", result);
+    const onListAlerts = () => runAction("listAlerts", async () => listAlerts());
+
+    const onGetActiveCount = () => runAction("getActiveCount", async () => {
+        const value = await getActiveCount();
+        setActiveCount(String(value));
+        return { activeAlerts: value };
     });
 
-    const onUpdateStock = () => runAction("updateStock", async () => {
-        validateCommon();
-        const qty = parseNumericField(form.quantityChange, "Quantity change");
-        if (qty <= 0) throw new Error("Quantity change must be greater than zero");
+    const sevNum = parseInt(form.severity, 10) || 0;
 
-        const result = await updateStock({
-            id: form.id.trim(),
-            owner: form.owner.trim(),
-            quantityChange: form.quantityChange.trim(),
-            isAddition: form.isAddition,
-        });
-
-        return buildWriteSummary("updateStock", result);
-    });
-
-    const onUpdatePrice = () => runAction("updatePrice", async () => {
-        validateCommon();
-        parseNumericField(form.newPrice, "New price");
-
-        const result = await updatePrice({
-            id: form.id.trim(),
-            owner: form.owner.trim(),
-            newPrice: form.newPrice.trim(),
-        });
-
-        return buildWriteSummary("updatePrice", result);
-    });
-
-    const onDiscontinue = () => runAction("discontinue", async () => {
-        validateCommon();
-        const result = await discontinueProduct({
-            id: form.id.trim(),
-            owner: form.owner.trim(),
-        });
-
-        return buildWriteSummary("discontinue", result);
-    });
-
-    const onGetProduct = () => runAction("getProduct", async () => getProduct(form.id.trim()));
-    const onListProducts = () => runAction("listProducts", async () => listProducts());
-    const onGetLowStock = () => runAction("getLowStock", async () => {
-        parseNumericField(form.lowStockThreshold, "Low stock threshold");
-        return getLowStock(form.lowStockThreshold.trim());
-    });
-    const onGetTotalValue = () => runAction("getTotalValue", async () => getTotalValue());
-
-    const btnClass = (actionName, base) =>
-        `${base}${loadingAction === actionName ? " btn-loading" : ""}`;
-
+    const truncAddr = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "";
     const tabs = [
-        { key: "add", label: "Add Product" },
-        { key: "stock", label: "Stock & Price" },
-        { key: "queries", label: "Queries" },
+        { key: "create", label: "Create Alert" },
+        { key: "response", label: "Response" },
+        { key: "monitor", label: "Monitor" },
     ];
 
     return (
         <main className="app">
-            <header className="top-shell">
-                <section className="hero">
-                    <p className="kicker">Soroban Inventory Console</p>
-                    <h1>Smart Contract Operations</h1>
-                    <p className="subtitle">
-                        Production-style interface for your contract: create products, update stock and price,
-                        track low inventory, and monitor total value.
-                    </p>
-                </section>
+            {/* Wallet Status Bar */}
+            <div className="wallet-status-bar">
+                <div className="wallet-status-left">
+                    <span className={`wallet-dot ${walletState ? "connected" : ""}`} />
+                    <span className="wallet-addr">
+                        {walletState ? truncAddr(walletState) : "Not connected"}
+                    </span>
+                </div>
+                <button
+                    type="button"
+                    id="connectWallet"
+                    onClick={onConnect}
+                    disabled={isBusy}
+                    className={loadingAction === "connect" ? "btn-loading" : ""}
+                >
+                    {walletState ? "Reconnect" : "Connect Freighter"}
+                </button>
+            </div>
 
-                <div className="wallet-panel">
-                    <div className="wallet-head">
-                        <span className={`status-dot ${walletState ? "connected" : "disconnected"}`}></span>
-                        <p className="wallet-title">Wallet</p>
-                    </div>
-                    <p className="wallet-line">
-                        {walletState ? `Connected: ${truncateAddr(walletState)}` : "Not connected"}
-                    </p>
-                    <button type="button" className={btnClass("connect", "btn btn-connect")} onClick={onConnect} disabled={isBusy}>
-                        {walletState ? "Refresh Connection" : "Connect Freighter"}
+            {/* Hero */}
+            <section className="hero">
+                <div className="hero-row">
+                    <span className="alert-icon">&#128205;</span>
+                    <span className="pulse-dot"></span>
+                    <span className="kicker">Stellar Soroban Project 23</span>
+                </div>
+                <h1>Geo-based Alert System</h1>
+                <p className="subtitle">
+                    Create location-based alerts, acknowledge, escalate, and resolve them.
+                    Coordinates use i128 scaled by 1e7 (e.g., 40.7128 N = 407128000).
+                </p>
+            </section>
+
+            {/* Alert Monitor */}
+            <div className="monitor-strip">
+                <div className="monitor-box">
+                    <div className="mon-label">Active Alerts</div>
+                    <div className="mon-value">{activeCount}</div>
+                </div>
+                <div className="monitor-box">
+                    <div className="mon-label">Current Alert</div>
+                    <div className="mon-value" style={{ fontSize: "1.1rem" }}>{form.id}</div>
+                </div>
+                <div className="monitor-box">
+                    <div className="mon-label">Severity</div>
+                    <div className="mon-value">{form.severity}/5</div>
+                </div>
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="tab-bar">
+                {tabs.map((t) => (
+                    <button
+                        key={t.key}
+                        type="button"
+                        className={`tab-btn ${activeTab === t.key ? "active" : ""}`}
+                        onClick={() => setActiveTab(t.key)}
+                    >
+                        {t.label}
                     </button>
-                    {walletState && (
+                ))}
+            </div>
+
+            {/* Tab: Create Alert */}
+            {activeTab === "create" && (
+                <section className="card">
+                    <h2>Issue Alert</h2>
+                    <div className="form-grid">
+                        <div className="field">
+                            <label htmlFor="id">Alert ID</label>
+                            <input id="id" name="id" value={form.id} onChange={setField} />
+                            <span className="helper">Unique alert identifier</span>
+                        </div>
+                        <div className="field">
+                            <label htmlFor="creator">Creator Address</label>
+                            <input id="creator" name="creator" value={form.creator} onChange={setField} placeholder="G..." />
+                            <span className="helper">Stellar public key starting with G</span>
+                        </div>
+                        <div className="field full">
+                            <label htmlFor="title">Title</label>
+                            <input id="title" name="title" value={form.title} onChange={setField} />
+                        </div>
+                        <div className="field full">
+                            <label htmlFor="description">Description</label>
+                            <input id="description" name="description" value={form.description} onChange={setField} />
+                        </div>
+                        <div className="field">
+                            <label htmlFor="alertType">Alert Type</label>
+                            <input id="alertType" name="alertType" value={form.alertType} onChange={setField} />
+                        </div>
+                        <div className="field">
+                            <label htmlFor="severity">Severity (0-5)</label>
+                            <input id="severity" name="severity" value={form.severity} onChange={setField} type="number" />
+                            <div className="severity-band">
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                    <div key={n} className={`sev-block ${sevNum >= n ? `active-${n}` : ""}`} />
+                                ))}
+                            </div>
+                        </div>
+                        <div className="field">
+                            <label htmlFor="latitude">Latitude (i128)</label>
+                            <input id="latitude" name="latitude" value={form.latitude} onChange={setField} type="number" />
+                            <span className="helper">Scaled by 1e7, e.g. 407128000</span>
+                        </div>
+                        <div className="field">
+                            <label htmlFor="longitude">Longitude (i128)</label>
+                            <input id="longitude" name="longitude" value={form.longitude} onChange={setField} type="number" />
+                            <span className="helper">Scaled by 1e7, e.g. -740060000</span>
+                        </div>
+                        <div className="field">
+                            <label htmlFor="radius">Radius (meters)</label>
+                            <input id="radius" name="radius" value={form.radius} onChange={setField} type="number" />
+                            <span className="helper">Alert radius in meters</span>
+                        </div>
+                        <div className="field">
+                            <label htmlFor="expiresAt">Expires At (u64)</label>
+                            <input id="expiresAt" name="expiresAt" value={form.expiresAt} onChange={setField} type="number" />
+                            <span className="helper">Unix timestamp in seconds</span>
+                        </div>
+                    </div>
+                    <div className="btn-group">
                         <button
                             type="button"
-                            className="btn btn-subtle"
+                            className={`btn-primary ${loadingAction === "createAlert" ? "btn-loading" : ""}`}
+                            onClick={onCreateAlert}
                             disabled={isBusy}
-                            onClick={() => setForm((prev) => ({ ...prev, owner: walletState }))}
                         >
-                            Use Connected Address
+                            Issue Alert
                         </button>
-                    )}
-                </div>
-            </header>
-
-            <section className="stats-grid" aria-label="Dashboard summary">
-                {dashboardStats.map((stat) => (
-                    <article key={stat.label} className="stat-card">
-                        <p className="stat-label">{stat.label}</p>
-                        <p className="stat-value">{stat.value}</p>
-                    </article>
-                ))}
-            </section>
-
-            <section className={`notice notice-${notice.type}`}>
-                <p>{notice.message}</p>
-            </section>
-
-            <div className="workspace-grid">
-                <section className="panel panel-main">
-                    <nav className="tab-nav" aria-label="Action groups">
-                        {tabs.map((t) => (
-                            <button
-                                key={t.key}
-                                type="button"
-                                className={`tab-btn${activeTab === t.key ? " active" : ""}`}
-                                onClick={() => setActiveTab(t.key)}
-                            >
-                                {t.label}
-                            </button>
-                        ))}
-                    </nav>
-
-                    {activeTab === "add" && (
-                        <section className="card">
-                            <div className="card-header">
-                                <h2>Add Product</h2>
-                                <p>Create a new product entry on-chain.</p>
-                            </div>
-                            <div className="form-grid cols-2">
-                                <div className="form-group">
-                                    <label htmlFor="entryId">Product ID</label>
-                                    <input id="entryId" name="id" value={form.id} onChange={setField} maxLength={32} />
-                                    <span className="helper">Contract key symbol, keep short and unique</span>
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="owner">Owner Address</label>
-                                    <input id="owner" name="owner" value={form.owner} onChange={setField} placeholder="G..." />
-                                    <span className="helper">Stellar public key</span>
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="name">Product Name</label>
-                                    <input id="name" name="name" value={form.name} onChange={setField} />
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="sku">SKU</label>
-                                    <input id="sku" name="sku" value={form.sku} onChange={setField} />
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="quantity">Quantity</label>
-                                    <input id="quantity" name="quantity" value={form.quantity} onChange={setField} type="number" min="0" />
-                                    <span className="helper">u32 value</span>
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="unitPrice">Unit Price (stroops)</label>
-                                    <input id="unitPrice" name="unitPrice" value={form.unitPrice} onChange={setField} type="number" min="0" />
-                                    <span className="helper">i128 value</span>
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="category">Category Symbol</label>
-                                    <input id="category" name="category" value={form.category} onChange={setField} />
-                                </div>
-                            </div>
-                            <div className="actions">
-                                <button type="button" className={btnClass("addProduct", "btn btn-primary")} onClick={onAddProduct} disabled={isBusy}>Add Product</button>
-                                <button type="button" className={btnClass("getProduct", "btn btn-outline")} onClick={onGetProduct} disabled={isBusy}>Get Product</button>
-                                <button type="button" className={btnClass("listProducts", "btn btn-outline")} onClick={onListProducts} disabled={isBusy}>List Products</button>
-                            </div>
-                        </section>
-                    )}
-
-                    {activeTab === "stock" && (
-                        <section className="card stock-card">
-                            <div className="card-header">
-                                <h2>Stock & Price Control</h2>
-                                <p>Owner-signed updates for inventory and pricing.</p>
-                            </div>
-                            <div className="form-grid cols-3">
-                                <div className="form-group">
-                                    <label htmlFor="quantityChange">Quantity Change</label>
-                                    <input id="quantityChange" name="quantityChange" value={form.quantityChange} onChange={setField} type="number" min="0" />
-                                </div>
-                                <div className="checkbox-row">
-                                    <input type="checkbox" id="isAddition" name="isAddition" checked={form.isAddition} onChange={setField} />
-                                    <span>{form.isAddition ? "Addition mode" : "Removal mode"}</span>
-                                </div>
-                                <div className="form-group">
-                                    <label htmlFor="newPrice">New Price (stroops)</label>
-                                    <input id="newPrice" name="newPrice" value={form.newPrice} onChange={setField} type="number" min="0" />
-                                </div>
-                            </div>
-                            <div className="actions">
-                                <button type="button" className={btnClass("updateStock", "btn btn-primary")} onClick={onUpdateStock} disabled={isBusy}>Update Stock</button>
-                                <button type="button" className={btnClass("updatePrice", "btn btn-outline")} onClick={onUpdatePrice} disabled={isBusy}>Update Price</button>
-                                <button
-                                    type="button"
-                                    className={btnClass("discontinue", `btn btn-danger-outline${confirmAction === "discontinue" ? " btn-confirm-pulse" : ""}`)}
-                                    onClick={() => handleDestructive("discontinue", onDiscontinue)}
-                                    disabled={isBusy}
-                                >
-                                    {confirmAction === "discontinue" ? "Click Again To Confirm" : "Discontinue Product"}
-                                </button>
-                            </div>
-                        </section>
-                    )}
-
-                    {activeTab === "queries" && (
-                        <section className="card">
-                            <div className="card-header">
-                                <h2>Read Queries</h2>
-                                <p>Inspect current state without writing on-chain.</p>
-                            </div>
-                            <div className="queries-grid">
-                                <div className="query-item">
-                                    <div className="form-group">
-                                        <label htmlFor="lowStockThreshold">Low Stock Threshold</label>
-                                        <input id="lowStockThreshold" name="lowStockThreshold" value={form.lowStockThreshold} onChange={setField} type="number" min="0" />
-                                    </div>
-                                    <button type="button" className={btnClass("getLowStock", "btn btn-outline")} onClick={onGetLowStock} disabled={isBusy}>Get Low Stock</button>
-                                </div>
-                                <div className="query-item">
-                                    <p className="helper helper-strong">Total inventory value includes only non-discontinued products.</p>
-                                    <button type="button" className={btnClass("getTotalValue", "btn btn-outline")} onClick={onGetTotalValue} disabled={isBusy}>Get Total Value</button>
-                                </div>
-                            </div>
-                        </section>
-                    )}
+                    </div>
                 </section>
+            )}
 
-                <aside className="panel panel-side">
-                    <section className="output-terminal">
-                        <div className="terminal-bar">
-                            <span className="terminal-dot red"></span>
-                            <span className="terminal-dot yellow"></span>
-                            <span className="terminal-dot green"></span>
-                            <span className="terminal-title">latest-result.json</span>
-                        </div>
-                        <div className={`terminal-body output-${status}`}>
-                            {output === "Ready." ? (
-                                <p className="empty-state">Run any action to see decoded results here.</p>
-                            ) : (
-                                <pre id="output">{output}</pre>
-                            )}
-                        </div>
-                    </section>
+            {/* Tab: Response */}
+            {activeTab === "response" && (
+                <section className="card">
+                    <h2>Alert Response</h2>
+                    <div className="field" style={{ marginBottom: "1rem" }}>
+                        <label htmlFor="responder">Responder Address</label>
+                        <input id="responder" name="responder" value={form.responder} onChange={setField} placeholder="G..." />
+                        <span className="helper">Stellar public key of the responder</span>
+                    </div>
+                    <div className="response-actions">
+                        <button
+                            type="button"
+                            className={`btn-ack ${loadingAction === "acknowledge" ? "btn-loading" : ""}`}
+                            onClick={onAcknowledge}
+                            disabled={isBusy}
+                        >
+                            Acknowledge
+                        </button>
+                        <button
+                            type="button"
+                            className={`btn-resolve ${loadingAction === "resolve" ? "btn-loading" : ""}`}
+                            onClick={onResolve}
+                            disabled={isBusy}
+                        >
+                            Resolve
+                        </button>
+                        <button
+                            type="button"
+                            className={`btn-escalate ${loadingAction === "escalate" ? "btn-loading" : ""}`}
+                            onClick={onEscalate}
+                            disabled={isBusy}
+                        >
+                            {confirmingBtn === "escalate" ? "Confirm?" : "Escalate"}
+                        </button>
+                        <button
+                            type="button"
+                            className={`btn-ack ${loadingAction === "getActiveCount" ? "btn-loading" : ""}`}
+                            onClick={onGetActiveCount}
+                            disabled={isBusy}
+                        >
+                            Refresh Count
+                        </button>
+                    </div>
+                </section>
+            )}
 
-                    <section className="activity-card">
-                        <div className="card-header card-header-compact">
-                            <h2>Recent Activity</h2>
-                        </div>
-                        {history.length === 0 ? (
-                            <p className="empty-state">No actions yet.</p>
-                        ) : (
-                            <ul className="history-list">
-                                {history.map((entry, index) => (
-                                    <li key={`${entry.action}-${entry.time}-${index}`} className="history-item">
-                                        <span className={`history-pill ${entry.state}`}>{entry.state}</span>
-                                        <span className="history-action">{entry.action}</span>
-                                        <span className="history-time">{entry.time}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </section>
-                </aside>
-            </div>
+            {/* Tab: Monitor */}
+            {activeTab === "monitor" && (
+                <section className="card">
+                    <h2>Query Alerts</h2>
+                    <div className="query-strip">
+                        <button
+                            type="button"
+                            className={`btn-ghost ${loadingAction === "getAlert" ? "btn-loading" : ""}`}
+                            onClick={onGetAlert}
+                            disabled={isBusy}
+                        >
+                            Get Alert
+                        </button>
+                        <button
+                            type="button"
+                            className={`btn-ghost ${loadingAction === "listAlerts" ? "btn-loading" : ""}`}
+                            onClick={onListAlerts}
+                            disabled={isBusy}
+                        >
+                            List All
+                        </button>
+                    </div>
+                </section>
+            )}
+
+            {/* Alert Feed / Output */}
+            <section className="card alert-feed">
+                <h2>Alert Feed</h2>
+                <pre id="output" className={`status-${status}`}>
+                    {output || "Issue or query alerts to see results here."}
+                </pre>
+            </section>
         </main>
     );
 }

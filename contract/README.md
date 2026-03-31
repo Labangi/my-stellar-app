@@ -1,22 +1,25 @@
-# Soroban Project
+# 📍 GeoAlert — Decentralized Geo-based Alert System
 
-## Project Structure
+GeoAlert is a decentralized application (dApp) built on **Stellar Soroban** that enables users to create, manage, and respond to location-based alerts on-chain.
 
-This repository uses the recommended structure for a Soroban project:
+---
 
-```text
-.
-├── contracts
-│   └── hello_world
-│       ├── src
-│       │   ├── lib.rs
-│       │   └── test.rs
-│       └── Cargo.toml
-├── Cargo.toml
-└── README.md
-```
+## 🚀 Features
 
-- New Soroban contracts can be put in `contracts`, each in their own directory. There is already a `hello_world` contract in there to get you started.
-- If you initialized this project with any other example contracts via `--with-example`, those contracts will be in the `contracts` directory as well.
-- Contracts should have their own `Cargo.toml` files that rely on the top-level `Cargo.toml` workspace for their dependencies.
-- Frontend libraries can be added to the top-level directory as well. If you initialized this project with a frontend template via `--frontend-template` you will have those files already included.
+- 🌍 **Geo-based Alerts**
+  - Create alerts with latitude, longitude, and radius
+- ⚠️ **Severity Levels**
+  - Alerts support severity from 0–5 with escalation
+- 🔔 **Alert Lifecycle**
+  - Create → Acknowledge → Escalate → Resolve
+- 👥 **Multi-user Interaction**
+  - Different users can respond to alerts
+- ⏱️ **Expiration Support**
+  - Alerts expire based on timestamp
+- 🔗 **Fully On-chain**
+  - All data stored and managed via Soroban smart contract
+
+---
+
+## 🧱 Project Structure
+
